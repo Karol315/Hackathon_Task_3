@@ -7,7 +7,7 @@
 #SBATCH --output=logs/prepare_%j.log
 
 # Load modules and activate environment
-module load Python/3.10.12
+module add GCCcore/13.2.0 Python/3.11.5
 source "$SCRATCH/venvs/hackathon_task_3/bin/activate"
 
 mkdir -p logs
