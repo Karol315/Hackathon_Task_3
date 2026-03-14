@@ -10,6 +10,16 @@ def create_features_for_device(df):
     Apply feature engineering to a single device's dataframe.
     Assumes df is sorted by Timedate.
     """
+    # Fix potential column name mismatches
+    col_mapping = {
+        'timedate': 'Timedate', 
+        'deviceid': 'deviceId'
+    }
+    df = df.rename(columns={c: col_mapping.get(str(c).lower(), c) for c in df.columns})
+
+    if 'Timedate' not in df.columns:
+        raise KeyError(f"'Timedate' not found. Available columns: {list(df.columns)}")
+
     # Parse Timedate
     df['Timedate'] = pd.to_datetime(df['Timedate'])
     df = df.sort_values(by='Timedate')
@@ -76,12 +86,32 @@ def aggregate_and_engineer(input_dir, output_dir):
     # Step 1: Bucket by deviceId
     print("Step 1: Bucketing data by deviceId...")
     
+    # Check for already processed files to support resuming
+    state_file = os.path.join(temp_dir, 'processed_chunks.txt')
+    processed_chunks = set()
+    if os.path.exists(state_file):
+        with open(state_file, 'r') as f:
+            processed_chunks = set(line.strip() for line in f)
+            print(f"Resuming: Found {len(processed_chunks)} already processed chunks.")
+    
     # Keep track of known devices to append
     known_devices = set()
+    # Populate known_devices from existing files in temp_dir
+    for existing_device_file in glob.glob(os.path.join(temp_dir, '*.csv')):
+        known_devices.add(os.path.basename(existing_device_file).replace('.csv', ''))
     
     for i, file in enumerate(split_files):
-        print(f"Processing split {i}/{len(split_files)} for bucketing...")
+        filename = os.path.basename(file)
+        if filename in processed_chunks:
+            print(f"Skipping {filename} - already bucketed.")
+            continue
+            
+        print(f"Processing split {i}/{len(split_files)} for bucketing: {filename}...")
         chunk = pd.read_csv(file)
+        
+        # Ensure column name consistency
+        col_mapping = {'timedate': 'Timedate', 'deviceid': 'deviceId'}
+        chunk = chunk.rename(columns={c: col_mapping.get(str(c).lower(), c) for c in chunk.columns})
         
         if 'deviceId' not in chunk.columns:
             print(f"Skipping {file} - no deviceId column.")
@@ -93,11 +123,16 @@ def aggregate_and_engineer(input_dir, output_dir):
             out_file = os.path.join(temp_dir, f"{safe_device_id}.csv")
             
             # If we've seen this device before, append without header. Otherwise write with header.
-            mode = 'a' if device_id in known_devices else 'w'
-            header = not (device_id in known_devices)
+            mode = 'a' if safe_device_id in known_devices else 'w'
+            header = not (safe_device_id in known_devices)
             
             group.to_csv(out_file, mode=mode, header=header, index=False)
-            known_devices.add(device_id)
+            known_devices.add(safe_device_id)
+            
+        # Mark chunk as processed
+        with open(state_file, 'a') as f:
+            f.write(filename + '\n')
+        processed_chunks.add(filename)
 
     # Step 2: Feature Engineering per device
     print(f"Step 2: Feature engineering for {len(known_devices)} devices...")
