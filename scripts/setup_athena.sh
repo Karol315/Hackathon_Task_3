@@ -3,14 +3,7 @@
 # Setup environment for Athena GPU Training
 module add GCCcore/13.2.0 Python/3.11.5
 
-# Ensure we are in $SCRATCH
-if [[ "$PWD" != "$SCRATCH"* ]]; then
-    echo "ERROR: You are NOT in your \$SCRATCH directory."
-    echo "Current path: $PWD"
-    echo "Athena requires working in \$SCRATCH to avoid \$HOME quota limits."
-    echo "Please move your project to a subdirectory in \$SCRATCH (e.g. $SCRATCH/Hackathon_Task_3) and run again."
-    exit 1
-fi
+
 
 # Create venv in scratch directory
 VENV_DIR="$SCRATCH/venvs/hackathon_task_3"
