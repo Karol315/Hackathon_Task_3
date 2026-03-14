@@ -5,17 +5,30 @@ module add GCCcore/13.2.0 Python/3.11.5
 
 # Ensure we are in $SCRATCH
 if [[ "$PWD" != "$SCRATCH"* ]]; then
-    echo "WARNING: You are NOT in your \$SCRATCH directory."
+    echo "ERROR: You are NOT in your \$SCRATCH directory."
+    echo "Current path: $PWD"
     echo "Athena requires working in \$SCRATCH to avoid \$HOME quota limits."
-    # Optionally: exit 1
+    echo "Please move your project to a subdirectory in \$SCRATCH (e.g. $SCRATCH/Hackathon_Task_3) and run again."
+    exit 1
 fi
 
 # Create venv in scratch directory
 VENV_DIR="$SCRATCH/venvs/hackathon_task_3"
-mkdir -p "$VENV_DIR"
+mkdir -p "$(dirname "$VENV_DIR")"
+
+# Check if venv exists and matches our current Python version
+if [ -d "$VENV_DIR" ]; then
+    VENV_PY_VER=$("$VENV_DIR/bin/python" --version 2>&1 | cut -d' ' -f2 | cut -d. -f1,2)
+    CUR_PY_VER=$(python3 --version 2>&1 | cut -d' ' -f2 | cut -d. -f1,2)
+    
+    if [ "$VENV_PY_VER" != "$CUR_PY_VER" ]; then
+        echo "Python version mismatch (Venv: $VENV_PY_VER, System: $CUR_PY_VER). Recreating venv..."
+        rm -rf "$VENV_DIR"
+    fi
+fi
 
 if [ ! -d "$VENV_DIR/bin" ]; then
-    echo "Creating virtual environment in $VENV_DIR..."
+    echo "Creating fresh virtual environment in $VENV_DIR..."
     python3 -m venv "$VENV_DIR"
 fi
 
