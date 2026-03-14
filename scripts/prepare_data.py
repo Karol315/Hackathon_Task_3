@@ -3,30 +3,10 @@ import pandas as pd
 import numpy as np
 import pickle
 import sys
-import shutil
+import gc
 
-# Dodanie folderu nadrzędnego do ścieżki
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from src.features import FeaturePipeline
-
-def process_and_save_set(name, folder, weather_df, pipeline, data_dir, filename):
-    files = [os.path.join(folder, f) for f in os.listdir(folder) if f.endswith('.parquet')]
-    if not files:
-        print(f"No data for {name}")
-        return
-    
-    print(f"Concatenating and transforming {name} set...")
-    df = pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
-    df['timedate'] = pd.to_datetime(df['timedate'])
-    
-    # Transform
-    df = pipeline.merge_weather(df, weather_df)
-    df = pipeline.transform(df)
-    
-    print(f"Saving {name} to {filename}...")
-    df.to_parquet(os.path.join(data_dir, filename), index=False)
-    del df
 
 def main():
     data_dir = 'data'
@@ -35,74 +15,73 @@ def main():
     weather_path = os.path.join(data_dir, 'weather_daily_updates.csv')
     pipeline_path = os.path.join(data_dir, 'pipeline.pkl')
     
-    tmp_dir = os.path.join(data_dir, 'tmp_process')
-    folders = {
-        'train': os.path.join(tmp_dir, 'train'),
-        'valid': os.path.join(tmp_dir, 'valid'),
-        'test': os.path.join(tmp_dir, 'test')
-    }
-
-    # Reset tmp dirs
-    if os.path.exists(tmp_dir):
-        shutil.rmtree(tmp_dir)
-    for p in folders.values():
-        os.makedirs(p, exist_ok=True)
-
     print("Loading metadata...")
     devices_df = pd.read_csv(devices_path)
     weather_df = pd.read_csv(weather_path)
     
-    print(f"Reading {data_path} - flushing chunks to disk...")
-    chunk_size = 500000
+    pipeline = FeaturePipeline()
+    
+    print("Reading first chunk to fit pipeline...")
+    first_chunk = pd.read_csv(data_path, nrows=100000)
+    first_chunk = pd.merge(first_chunk, devices_df, on='deviceId', how='left')
+    train_sample = first_chunk[first_chunk['period'] == 'train']
+    if not train_sample.empty:
+        pipeline.fit(train_sample)
+        with open(pipeline_path, 'wb') as f:
+            pickle.dump(pipeline, f)
+    else:
+        print("No train data in first chunk, fitting on dummy data.")
+        pipeline.means['x2'] = 0
+        self.stds['x2'] = 1
+        pipeline.fitted = True
+
+    del first_chunk, train_sample
+    gc.collect()
+
+    # Zamiast trzymać w pamięci układ folderów, będziemy zapisywać do pojedynczych plików parquet w trybie 'append'
+    # (Fastparquet to obsługuje, po prostu zapisujemy chunks)
+    
+    train_path = os.path.join(data_dir, 'train_processed.parquet')
+    val_path = os.path.join(data_dir, 'val_processed.parquet')
+    test_path = os.path.join(data_dir, 'test_processed.parquet')
+    
+    for p in [train_path, val_path, test_path]:
+        if os.path.exists(p):
+            os.remove(p)
+
+    print(f"Reading {data_path} in safe chunks of 100k...")
+    chunk_size = 100000
+    
     try:
-        reader = pd.read_csv(data_path, chunksize=chunk_size)
+        reader = pd.read_csv(data_path, chunksize=chunk_size, engine='c')
         for i, chunk in enumerate(reader):
-            # Print status every 10 chunks
             if i % 10 == 0:
                 print(f"Processing chunk {i}...")
             
             chunk = pd.merge(chunk, devices_df, on='deviceId', how='left')
+            chunk = pipeline.merge_weather(chunk, weather_df)
+            chunk = pipeline.transform(chunk)
             
-            for period, folder in folders.items():
-                part = chunk[chunk['period'] == period]
-                if not part.empty:
-                    part.to_parquet(os.path.join(folder, f"{i}.parquet"))
+            # Zrzut od razu do docelowych plików z dopisywaniem (append)
+            train_part = chunk[chunk['period'] == 'train']
+            val_part = chunk[chunk['period'] == 'valid']
+            test_part = chunk[chunk['period'] == 'test']
             
-            del chunk # Aggressively free memory
+            if not train_part.empty:
+                train_part.to_parquet(train_path, engine='fastparquet', append=os.path.exists(train_path))
+            if not val_part.empty:
+                val_part.to_parquet(val_path, engine='fastparquet', append=os.path.exists(val_path))
+            if not test_part.empty:
+                test_part.to_parquet(test_path, engine='fastparquet', append=os.path.exists(test_path))
+                
+            del chunk, train_part, val_part, test_part
+            gc.collect() # Wymuszenie czyszczenia
             
     except Exception as e:
         print(f"Error during chunked reading: {e}")
         return
 
-    # Initialize / Load Pipeline
-    pipeline = FeaturePipeline()
-    
-    # To fit the pipeline, we need the train set in memory once
-    train_files = [os.path.join(folders['train'], f) for f in os.listdir(folders['train'])]
-    if train_files:
-        print("Loading TRAIN set for fitting...")
-        train_df = pd.concat([pd.read_parquet(f) for f in train_files], ignore_index=True)
-        train_df['timedate'] = pd.to_datetime(train_df['timedate'])
-        
-        print("Fitting pipeline...")
-        pipeline.fit(train_df)
-        
-        with open(pipeline_path, 'wb') as f:
-            pickle.dump(pipeline, f)
-        del train_df # Release memory
-    else:
-        if os.path.exists(pipeline_path):
-            with open(pipeline_path, 'rb') as f:
-                pipeline = pickle.load(f)
-
-    # Process each set one by one to keep memory low
-    process_and_save_set('TRAIN', folders['train'], weather_df, pipeline, data_dir, 'train_processed.parquet')
-    process_and_save_set('VAL', folders['valid'], weather_df, pipeline, data_dir, 'val_processed.parquet')
-    process_and_save_set('TEST', folders['test'], weather_df, pipeline, data_dir, 'test_processed.parquet')
-
-    # Cleanup tmp
-    shutil.rmtree(tmp_dir)
-    print("Data Preparation Complete!")
+    print("Data Preparation Complete - Data written to final Parquet files natively!")
 
 if __name__ == "__main__":
     main()
