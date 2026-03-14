@@ -8,7 +8,6 @@
 #SBATCH --output=logs/train_%j.log
 
 # Load modules and activate environment
-# Load modules and activate environment
 module add GCCcore/13.2.0 Python/3.11.5
 source "$SCRATCH/venvs/hackathon_task_3/bin/activate"
 
