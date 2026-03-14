@@ -11,83 +11,86 @@ from src.features import FeaturePipeline
 
 def main():
     data_dir = 'data'
-    data_path = os.path.join(data_dir, 'data.csv') # Zwróć uwagę, czy na pewno główny plik nazywa się test.csv
+    data_path = os.path.join(data_dir, 'data.csv') 
     devices_path = os.path.join(data_dir, 'devices.csv')
     weather_path = os.path.join(data_dir, 'weather_daily_updates.csv')
     pipeline_path = os.path.join(data_dir, 'pipeline.pkl')
     
     print("Loading datasets...")
-    # Load devices mapping
     devices_df = pd.read_csv(devices_path)
-    
-    # Load weather
     weather_df = pd.read_csv(weather_path)
     
-    print("Reading main data.csv (this might take a while)...")
+    print(f"Reading {data_path} in chunks to avoid OOM...")
+    train_chunks = []
+    val_chunks = []
+    test_chunks = []
+    
+    # Process in chunks of 500,000 rows
+    chunk_size = 500000
     try:
-        df_sample = pd.read_csv(data_path, nrows=100)
-        print("Columns in main data:", df_sample.columns.tolist())
-        df = pd.read_csv(data_path)
-    except MemoryError:
-        print("Memory Error! Switching to chunked processing...")
-        # Placeholder for chunked processing logic
+        reader = pd.read_csv(data_path, chunksize=chunk_size)
+        for i, chunk in enumerate(reader):
+            print(f"Processing chunk {i+1}...")
+            
+            # Merge with devices to get coordinates/metadata
+            chunk = pd.merge(chunk, devices_df, on='deviceId', how='left')
+            
+            # Split by period immediately to save memory
+            train_chunks.append(chunk[chunk['period'] == 'train'].copy())
+            val_chunks.append(chunk[chunk['period'] == 'valid'].copy())
+            test_chunks.append(chunk[chunk['period'] == 'test'].copy())
+            
+            # Optional: if memory is still an issue, we could save these to temp local parquets here
+            
+    except Exception as e:
+        print(f"Error during chunked reading: {e}")
         return
 
-    print("Merging devices metadata...")
-    df = pd.merge(df, devices_df, on='deviceId', how='left')
+    print("Concatenating processed chunks...")
+    train_df = pd.concat(train_chunks, ignore_index=True) if train_chunks else pd.DataFrame()
+    val_df = pd.concat(val_chunks, ignore_index=True) if val_chunks else pd.DataFrame()
+    test_df = pd.concat(test_chunks, ignore_index=True) if test_chunks else pd.DataFrame()
     
-    print("Converting timedate and splitting...")
-    df['timedate'] = pd.to_datetime(df['timedate'])
-    
-    # Rozdzielenie danych na zbiory
-    train_df = df[df['period'] == 'train'].copy()
-    val_df = df[df['period'] == 'valid'].copy()
-    test_df = df[df['period'] == 'test'].copy()
+    # Free memory
+    del train_chunks, val_chunks, test_chunks
     
     print(f"Split sizes - Train: {len(train_df)}, Val: {len(val_df)}, Test: {len(test_df)}")
     
-    # Initialize Pipeline
+    print("Converting timedate...")
+    for df in [train_df, val_df, test_df]:
+        if not df.empty:
+            df['timedate'] = pd.to_datetime(df['timedate'])
+    
     pipeline = FeaturePipeline()
     
-    # Logika dopasowania Pipeline'u (Fit)
     if not train_df.empty:
         print("Fitting pipeline on training data...")
+        # Use a subset for fitting PACF if train_df is too large
         pipeline.fit(train_df)
         
-        # Zapisz wyuczony Pipeline
-        print("Saving fitted Pipeline to pickle...")
+        print("Saving fitted Pipeline...")
         with open(pipeline_path, 'wb') as f:
             pickle.dump(pipeline, f)
     else:
-        print("No training data found in this batch.")
-        # Jeśli nie ma danych treningowych, MUSIMY wczytać stary pipeline, żeby transformować resztę
         if os.path.exists(pipeline_path):
             print(f"Loading pre-fitted Pipeline from {pipeline_path}...")
             with open(pipeline_path, 'rb') as f:
                 pipeline = pickle.load(f)
         else:
-            print("WARNING: No fitted Pipeline found on disk and no train data to fit. Transformations will fail!")
+            print("WARNING: No train data and no saved pipeline!")
 
-    # Przetwarzanie i zapis zbioru TRAIN
-    if not train_df.empty:
-        print("Transforming and saving TRAIN set...")
-        train_df = pipeline.merge_weather(train_df, weather_df)
-        train_df = pipeline.transform(train_df)
-        train_df.to_parquet(os.path.join(data_dir, 'train_processed.parquet'), index=False)
-    
-    # Przetwarzanie i zapis zbioru VAL
-    if not val_df.empty:
-        print("Transforming and saving VAL set...")
-        val_df = pipeline.merge_weather(val_df, weather_df)
-        val_df = pipeline.transform(val_df)
-        val_df.to_parquet(os.path.join(data_dir, 'val_processed.parquet'), index=False)
-    
-    # Przetwarzanie i zapis zbioru TEST
-    if not test_df.empty:
-        print("Transforming and saving TEST set...")
-        test_df = pipeline.merge_weather(test_df, weather_df)
-        test_df = pipeline.transform(test_df)
-        test_df.to_parquet(os.path.join(data_dir, 'test_processed.parquet'), index=False)
+    # Process and save
+    sets = [('TRAIN', train_df, 'train_processed.parquet'), 
+            ('VAL', val_df, 'val_processed.parquet'), 
+            ('TEST', test_df, 'test_processed.parquet')]
+            
+    for name, df, filename in sets:
+        if not df.empty:
+            print(f"Transforming and saving {name} set...")
+            df = pipeline.merge_weather(df, weather_df)
+            df = pipeline.transform(df)
+            df.to_parquet(os.path.join(data_dir, filename), index=False)
+            del df # Free memory immediately
         
     print("Data Preparation Complete!")
 
