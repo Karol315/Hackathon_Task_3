@@ -2,10 +2,10 @@
 #SBATCH -J feature_eng
 #SBATCH -N 1
 #SBATCH --ntasks-per-node 1
-#SBATCH --time=04:00:00
+#SBATCH --time=08:00:00
 #SBATCH -A tutorial
 #SBATCH -p tutorial
-#SBATCH --mem=32GB
+#SBATCH --mem=64GB
 #SBATCH --output=feature_eng_%J.out
 
 # Load the newest available Python
