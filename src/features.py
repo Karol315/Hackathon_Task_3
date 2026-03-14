@@ -45,6 +45,8 @@ class FeaturePipeline:
         df = df.copy()
         weather_df = weather_df.copy()
         
+        # Upewnij się, że timedate jest prawidłowym typem daty przed użyciem .dt
+        df['timedate'] = pd.to_datetime(df['timedate'])
         df['date'] = df['timedate'].dt.date
         weather_df['date'] = pd.to_datetime(weather_df['date']).dt.date
         
@@ -61,5 +63,8 @@ class FeaturePipeline:
         # Szybkie uzupełnianie braków (tylko ffill, bez groupby jeśli to możliwe, ale dla bezpieczeństwa można użyć bfill na całości)
         weather_cols = [c for c in weather_df_clean.columns if c not in ['date', 'lat_round', 'lon_round']]
         df[weather_cols] = df[weather_cols].ffill().bfill().fillna(0)
+        
+        # Usuwamy kolumny pomocnicze (w tym 'date', które jest obiektem Pythona nieobsługiwanym przez Parquet)
+        df = df.drop(columns=['date', 'lat_round', 'lon_round'])
         
         return df

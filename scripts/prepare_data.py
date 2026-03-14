@@ -10,7 +10,7 @@ from src.features import FeaturePipeline
 
 def main():
     data_dir = 'data'
-    data_path = os.path.join(data_dir, 'data.csv') 
+    data_path = os.path.join(data_dir, 'test.csv') 
     devices_path = os.path.join(data_dir, 'devices.csv')
     weather_path = os.path.join(data_dir, 'weather_daily_updates.csv')
     pipeline_path = os.path.join(data_dir, 'pipeline.pkl')
@@ -32,7 +32,7 @@ def main():
     else:
         print("No train data in first chunk, fitting on dummy data.")
         pipeline.means['x2'] = 0
-        self.stds['x2'] = 1
+        pipeline.stds['x2'] = 1
         pipeline.fitted = True
 
     del first_chunk, train_sample
